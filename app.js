@@ -109,14 +109,36 @@ async function init() {
     console.error(err);
     showEmpty(
       "Impossible de contacter l'API Pokémon TCG",
-      "Une erreur réseau ou serveur empêche de récupérer les données depuis pokemontcg.io. Vérifiez votre connexion et réessayez."
+      `Une erreur empêche de récupérer les données depuis pokemontcg.io. Vérifiez votre connexion et réessayez. Détail technique : ${err.message}`
     );
   }
 }
 
+// Small helper: fetch with a couple of retries (handles transient 429/5xx and
+// blips from the free, unauthenticated pokemontcg.io API).
+async function fetchWithRetry(url, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url);
+      if (res.status === 429 || res.status >= 500) {
+        lastErr = new Error(`HTTP ${res.status} depuis ${url}`);
+      } else if (!res.ok) {
+        throw new Error(`HTTP ${res.status} depuis ${url}`);
+      } else {
+        return res;
+      }
+    } catch (err) {
+      lastErr = err;
+    }
+    // wait a bit longer each retry before trying again
+    await new Promise((resolve) => setTimeout(resolve, 600 * (i + 1)));
+  }
+  throw lastErr;
+}
+
 async function findCelebrationSet() {
-  const res = await fetch(`${API_BASE}/sets?pageSize=250`);
-  if (!res.ok) throw new Error(`sets endpoint returned ${res.status}`);
+  const res = await fetchWithRetry(`${API_BASE}/sets?pageSize=250`);
   const json = await res.json();
   const sets = Array.isArray(json.data) ? json.data : [];
   const candidates = sets.filter((s) => SET_NAME_PATTERN.test(s.name || ""));
@@ -134,8 +156,7 @@ async function fetchAllCardsForSet(setId) {
 
   while (out.length < totalCount) {
     const url = `${API_BASE}/cards?q=set.id:${encodeURIComponent(setId)}&pageSize=${pageSize}&page=${page}&orderBy=number`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`cards endpoint returned ${res.status}`);
+    const res = await fetchWithRetry(url);
     const json = await res.json();
     const data = Array.isArray(json.data) ? json.data : [];
     out = out.concat(data);
